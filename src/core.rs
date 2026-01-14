@@ -3,7 +3,9 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use reqwest::blocking::Client as HttpClient;
 use serde::{Deserialize, Serialize};
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
+use std::time::{Duration, Instant};
 
 use thiserror::Error;
 use tracing::{debug, info, warn};
@@ -136,6 +138,7 @@ const MAX_CONNECTIONS: u32 = 9999;
 struct Client {
     http: HttpClient,
     rate_limit_secs: u64,
+    last_request: Cell<Option<Instant>>,
 }
 
 impl Client {
@@ -151,10 +154,20 @@ impl Client {
                 .timeout(std::time::Duration::from_secs(30))
                 .build()?,
             rate_limit_secs: config.rate_limit_secs,
+            last_request: Cell::new(None),
         })
     }
 
     fn post<T: serde::de::DeserializeOwned>(&self, fields: &str, ids: &[String]) -> Result<Vec<T>> {
+        // Check if we need to wait before making the request
+        if let Some(last) = self.last_request.get() {
+            let elapsed = last.elapsed();
+            let needed = Duration::from_secs(self.rate_limit_secs);
+            if elapsed < needed {
+                std::thread::sleep(needed - elapsed);
+            }
+        }
+
         let mut backoff = ExponentialBackoff::default();
         let url = format!("{}?fields={}", API_URL, fields);
 
@@ -166,7 +179,7 @@ impl Client {
                 .send()
             {
                 Ok(response) if response.status().is_success() => {
-                    std::thread::sleep(std::time::Duration::from_secs(self.rate_limit_secs));
+                    self.last_request.set(Some(Instant::now()));
                     return Ok(response.json()?);
                 }
                 Ok(response) => {
