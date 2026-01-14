@@ -25,7 +25,7 @@ struct Cli {
 enum Commands {
     /// Look up and build a citation graph from paper references
     Lookup(LookupArgs),
-    /// Launch the Svelte web UI
+    /// View a citation graph in the web UI
     View(ViewArgs),
 }
 
@@ -34,7 +34,7 @@ struct LookupArgs {
     /// Input file containing paper references (DOIs, arXiv IDs, URLs)
     r#in: PathBuf,
 
-    /// Output JSON file for the citation graph (prints to stdout if not specified)
+    /// Output JSON file for the citation graph (optional, defaults to stdout)
     #[arg(short, long)]
     out: Option<PathBuf>,
 
@@ -131,7 +131,7 @@ fn run_view(args: ViewArgs) -> Result<()> {
     for request in server.incoming_requests() {
         let path = request.url().split('?').next().unwrap_or("/");
 
-        // Handle API endpoint for graph file
+        // Have an API endpoint serve the json file if specified
         if path == "/api/graph" {
             if let Some(ref gpath) = graph_path {
                 match fs::read(gpath) {
@@ -175,7 +175,7 @@ fn run_view(args: ViewArgs) -> Result<()> {
                 (asset.data.into_owned(), mime)
             }
             None => {
-                // Fallback to index.html for SPA routing
+                // Fallback to index.html
                 match Assets::get("index.html") {
                     Some(asset) => {
                         let mime = "text/html; charset=utf-8".to_string();
