@@ -422,11 +422,11 @@
   {#if rawData}
     <label class="slider-group slider-cites">
       Cites ≥ {minCitesSeeds}
-      <input type="range" min="1" max="10" bind:value={minCitesSeeds} onchange={visualizeGraph} />
+      <input type="range" min="1" max={rawData.seeds.length} bind:value={minCitesSeeds} onchange={visualizeGraph} />
     </label>
     <label class="slider-group slider-cited">
       Cited ≥ {minCitedBySeeds}
-      <input type="range" min="1" max="10" bind:value={minCitedBySeeds} onchange={visualizeGraph} />
+      <input type="range" min="1" max={rawData.seeds.length} bind:value={minCitedBySeeds} onchange={visualizeGraph} />
     </label>
   {/if}
   {#if stats}
