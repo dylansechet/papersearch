@@ -1,22 +1,302 @@
 <script>
   import { onMount } from 'svelte';
   import ForceGraph from 'force-graph';
-  import * as d3 from 'd3-force';
+  import { forceManyBody, forceLink } from 'd3-force';
   import TomSelect from 'tom-select';
   import 'tom-select/dist/css/tom-select.css';
 
+  // Constants
+  const COLORS = {
+    seed: '#ff6b6b',
+    citesSeed: '#9b59b6',
+    citedBySeed: '#3498db',
+    linkDefault: '#ddd',
+    linkHighlight: '#999',
+    linkFaded: 'rgba(200,200,200,0.1)',
+  };
+
+  const NODE_TYPES = {
+    seed: 'square',
+    citesSeed: 'triangle',
+    citedBySeed: 'circle',
+  };
+
+  const GRAPH_CONFIG = {
+    baseNodeSize: 5,
+    maxNodeSizeBonus: 3,
+    chargeStrength: -50,
+    linkDistance: 60,
+    cooldownTicks: 200,
+    arrowLength: 3,
+  };
+
+  // DOM refs
   let graphContainer;
-  let graph;
   let fileInput;
   let searchInput;
+
+  // Instance refs
+  let graph;
   let tomSelect;
+
+  // Reactive state
   let stats = $state(null);
   let rawData = $state(null);
   let minCitesSeeds = $state(1);
   let minCitedBySeeds = $state(1);
+
+  // Internal state
   let highlight = { node: null, neighbors: new Set() };
   let currentNodes = [];
   let currentEdges = [];
+
+  // --- Utility Functions ---
+
+  /** Extract node ID from edge endpoint (handles both string IDs and node objects) */
+  function getEdgeNodeId(endpoint) {
+    return typeof endpoint === 'object' ? endpoint.id : endpoint;
+  }
+
+  /** Get neighbors of a node from edge list */
+  function findNeighbors(nodeId, edges) {
+    const neighbors = new Set();
+    for (const edge of edges) {
+      const src = getEdgeNodeId(edge.source);
+      const tgt = getEdgeNodeId(edge.target);
+      if (src === nodeId) neighbors.add(tgt);
+      if (tgt === nodeId) neighbors.add(src);
+    }
+    return neighbors;
+  }
+
+  /** Format paper info for display */
+  function formatPaperLabel(paper, nodeId) {
+    const year = paper.year ? ` (${paper.year})` : '';
+    const authors = paper.authors?.join(', ') || 'Unknown';
+    const venue = paper.venue ? `<br><i>${paper.venue}</i>` : '';
+    return `<b>${paper.title || nodeId}${year}</b><br>${authors}${venue}`;
+  }
+
+  /** Format paper for search dropdown */
+  function formatPaperOption(paper, nodeId) {
+    const year = paper.year ? ` (${paper.year})` : '';
+    return `${paper.title || nodeId}${year}`;
+  }
+
+  // --- Data Processing ---
+
+  /** Count citation relationships between seeds and other papers */
+  function computeCitationCounts(citations, seedSet) {
+    const citesSeeds = new Map();    // Papers that cite seeds
+    const citedBySeeds = new Map();  // Papers cited by seeds
+
+    for (const { from, to } of citations) {
+      // Non-seed paper cites a seed
+      if (seedSet.has(to) && !seedSet.has(from)) {
+        citesSeeds.set(from, (citesSeeds.get(from) || 0) + 1);
+      }
+      // Seed cites a non-seed paper
+      if (seedSet.has(from) && !seedSet.has(to)) {
+        citedBySeeds.set(to, (citedBySeeds.get(to) || 0) + 1);
+      }
+    }
+
+    return { citesSeeds, citedBySeeds };
+  }
+
+  /** Filter papers based on citation thresholds */
+  function filterPapers(papers, seedSet, citesSeeds, citedBySeeds) {
+    return papers.filter(paper => {
+      if (seedSet.has(paper.id)) return true;
+
+      const cites = citesSeeds.get(paper.id) || 0;
+      const cited = citedBySeeds.get(paper.id) || 0;
+
+      // Classify by dominant relationship
+      return cites > cited
+        ? cites >= minCitesSeeds
+        : cited >= minCitedBySeeds;
+    });
+  }
+
+  /** Determine node category based on citation relationships */
+  function getNodeCategory(paperId, seedSet, citesSeeds, citedBySeeds) {
+    if (seedSet.has(paperId)) return 'seed';
+
+    const cites = citesSeeds.get(paperId) || 0;
+    const cited = citedBySeeds.get(paperId) || 0;
+
+    return cites > cited ? 'citesSeed' : 'citedBySeed';
+  }
+
+  /** Build graph nodes from papers */
+  function buildNodes(papers, seedSet, citesSeeds, citedBySeeds) {
+    return papers.map(paper => {
+      const category = getNodeCategory(paper.id, seedSet, citesSeeds, citedBySeeds);
+      return {
+        id: paper.id,
+        color: COLORS[category],
+        type: NODE_TYPES[category],
+        category,
+        paper,
+      };
+    });
+  }
+
+  /** Build edges from citations, filtered to included papers */
+  function buildEdges(citations, includedIds) {
+    return citations
+      .filter(c => includedIds.has(c.from) && includedIds.has(c.to))
+      .map(c => ({ source: c.from, target: c.to }));
+  }
+
+  /** Compute node degrees from edges */
+  function computeDegrees(edges) {
+    const degree = new Map();
+    for (const { source, target } of edges) {
+      degree.set(source, (degree.get(source) || 0) + 1);
+      degree.set(target, (degree.get(target) || 0) + 1);
+    }
+    return degree;
+  }
+
+  /** Calculate node sizes based on relative degree within category */
+  function assignNodeSizes(nodes, degree) {
+    // Find max degree per category
+    const maxDegreeByCategory = { seed: 1, citesSeed: 1, citedBySeed: 1 };
+
+    for (const node of nodes) {
+      const deg = degree.get(node.id) || 0;
+      maxDegreeByCategory[node.category] = Math.max(maxDegreeByCategory[node.category], deg);
+    }
+
+    // Assign sizes
+    for (const node of nodes) {
+      const deg = degree.get(node.id) || 0;
+      const maxDeg = maxDegreeByCategory[node.category];
+      node.size = GRAPH_CONFIG.baseNodeSize + (deg / maxDeg) * GRAPH_CONFIG.maxNodeSizeBonus;
+    }
+  }
+
+  // --- Highlighting ---
+
+  function clearHighlight() {
+    highlight.node = null;
+    highlight.neighbors = new Set();
+  }
+
+  function setHighlight(nodeId, edges) {
+    highlight.node = nodeId;
+    highlight.neighbors = findNeighbors(nodeId, edges);
+  }
+
+  function refreshGraphHighlight() {
+    if (!graph) return;
+    graph.nodeCanvasObject(graph.nodeCanvasObject()).linkColor(graph.linkColor());
+  }
+
+  function highlightNode(nodeId) {
+    if (!graph || !nodeId) return;
+    setHighlight(nodeId, currentEdges);
+    refreshGraphHighlight();
+  }
+
+  // --- Graph Rendering ---
+
+  function getLinkColor(link) {
+    if (!highlight.node) return COLORS.linkDefault;
+
+    const src = getEdgeNodeId(link.source);
+    const tgt = getEdgeNodeId(link.target);
+    const isConnected = src === highlight.node || tgt === highlight.node;
+
+    return isConnected ? COLORS.linkHighlight : COLORS.linkFaded;
+  }
+
+  function drawNode(node, ctx, globalScale) {
+    const { x, y, size, color, type } = node;
+    const isHighlighted = !highlight.node || highlight.node === node.id || highlight.neighbors.has(node.id);
+
+    ctx.globalAlpha = isHighlighted ? 1 : 0.15;
+    ctx.fillStyle = color;
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 1 / globalScale;
+
+    switch (type) {
+      case 'square':
+        ctx.fillRect(x - size, y - size, size * 2, size * 2);
+        ctx.strokeRect(x - size, y - size, size * 2, size * 2);
+        break;
+      case 'triangle':
+        ctx.beginPath();
+        ctx.moveTo(x, y - size);
+        ctx.lineTo(x + size, y + size);
+        ctx.lineTo(x - size, y + size);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        break;
+      default: // circle
+        ctx.beginPath();
+        ctx.arc(x, y, size, 0, 2 * Math.PI);
+        ctx.fill();
+        ctx.stroke();
+    }
+
+    ctx.globalAlpha = 1;
+  }
+
+  function drawNodeHitArea(node, color, ctx) {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(node.x, node.y, node.size, 0, 2 * Math.PI);
+    ctx.fill();
+  }
+
+  function createGraph(nodes, edges) {
+    if (graph) graph._destructor();
+
+    graph = ForceGraph()(graphContainer)
+      .graphData({ nodes, links: edges })
+      .linkColor(getLinkColor)
+      .linkDirectionalArrowLength(GRAPH_CONFIG.arrowLength)
+      .d3Force('charge', forceManyBody().strength(GRAPH_CONFIG.chargeStrength))
+      .d3Force('link', forceLink().distance(GRAPH_CONFIG.linkDistance))
+      .nodeCanvasObject(drawNode)
+      .nodePointerAreaPaint(drawNodeHitArea)
+      .nodeLabel(n => formatPaperLabel(n.paper, n.id))
+      .cooldownTicks(GRAPH_CONFIG.cooldownTicks)
+      .onNodeClick(node => {
+        if (highlight.node === node.id) {
+          clearHighlight();
+        } else {
+          setHighlight(node.id, edges);
+        }
+        refreshGraphHighlight();
+      })
+      .onBackgroundClick(() => {
+        clearHighlight();
+        refreshGraphHighlight();
+      });
+  }
+
+  // --- Search ---
+
+  function updateSearchOptions() {
+    if (!tomSelect) return;
+
+    tomSelect.clear();
+    tomSelect.clearOptions();
+
+    for (const node of currentNodes) {
+      tomSelect.addOption({
+        value: node.id,
+        text: formatPaperOption(node.paper, node.id),
+      });
+    }
+  }
+
+  // --- Main Functions ---
 
   function loadGraph() {
     fileInput.click();
@@ -30,10 +310,12 @@
     reader.onload = (e) => {
       try {
         rawData = JSON.parse(e.target.result);
-        const seedCount = rawData.seeds.length;
-        const defaultMin = Math.max(1, Math.round(seedCount * 0.2));
+
+        // Set default filter thresholds based on seed count
+        const defaultMin = Math.max(1, Math.round(rawData.seeds.length * 0.2));
         minCitesSeeds = defaultMin;
         minCitedBySeeds = defaultMin;
+
         visualizeGraph();
       } catch (error) {
         alert('Error parsing JSON: ' + error.message);
@@ -44,207 +326,52 @@
 
   function visualizeGraph() {
     if (!rawData) return;
+
     const { papers, seeds, citations } = rawData;
     const seedSet = new Set(seeds);
 
-    // Count how many times each paper cites seeds vs is cited by seeds
-    const citesSeeds = new Map();
-    const citedBySeeds = new Map();
-
-    for (const c of citations) {
-      if (seedSet.has(c.to) && !seedSet.has(c.from)) {
-        citesSeeds.set(c.from, (citesSeeds.get(c.from) || 0) + 1);
-      }
-      if (seedSet.has(c.from) && !seedSet.has(c.to)) {
-        citedBySeeds.set(c.to, (citedBySeeds.get(c.to) || 0) + 1);
-      }
-    }
-
-    // Filter papers based on sliders
-    const filteredPapers = papers.filter(paper => {
-      if (seedSet.has(paper.id)) return true;  // Always keep seeds
-      const cites = citesSeeds.get(paper.id) || 0;
-      const cited = citedBySeeds.get(paper.id) || 0;
-      if (cites > cited) return cites >= minCitesSeeds;  // Citing paper
-      return cited >= minCitedBySeeds;  // Cited paper (includes ties)
-    });
-
+    // Process data
+    const { citesSeeds, citedBySeeds } = computeCitationCounts(citations, seedSet);
+    const filteredPapers = filterPapers(papers, seedSet, citesSeeds, citedBySeeds);
     const filteredIds = new Set(filteredPapers.map(p => p.id));
-    const paperMap = new Map(filteredPapers.map(p => [p.id, p]));
 
-    const nodes = filteredPapers.map(paper => {
-      const id = paper.id;
-      let color, type;
+    // Build graph data
+    const nodes = buildNodes(filteredPapers, seedSet, citesSeeds, citedBySeeds);
+    const edges = buildEdges(citations, filteredIds);
 
-      if (seedSet.has(id)) {
-        color = '#ff6b6b';
-        type = 'square';
-      } else {
-        const cites = citesSeeds.get(id) || 0;
-        const cited = citedBySeeds.get(id) || 0;
-        if (cites > cited) {
-          color = '#9b59b6';
-          type = 'triangle';
-        } else {
-          color = '#3498db';
-          type = 'circle';
-        }
-      }
+    // Size nodes by degree
+    const degree = computeDegrees(edges);
+    assignNodeSizes(nodes, degree);
 
-      return { id, color, type, paper };
-    });
-
-    const edges = citations
-      .filter(c => filteredIds.has(c.from) && filteredIds.has(c.to))
-      .map(c => ({ source: c.from, target: c.to }));
-
-    // Count degree (edges) per node for sizing
-    const degree = new Map();
-    edges.forEach(e => {
-      degree.set(e.source, (degree.get(e.source) || 0) + 1);
-      degree.set(e.target, (degree.get(e.target) || 0) + 1);
-    });
-
-    // Find max degree per category
-    let maxDegreeSeed = 1, maxDegreeCites = 1, maxDegreeCited = 1;
-    nodes.forEach(n => {
-      const deg = degree.get(n.id) || 0;
-      if (seedSet.has(n.id)) {
-        maxDegreeSeed = Math.max(maxDegreeSeed, deg);
-      } else if (n.type === 'triangle') {
-        maxDegreeCites = Math.max(maxDegreeCites, deg);
-      } else {
-        maxDegreeCited = Math.max(maxDegreeCited, deg);
-      }
-    });
-
-    // Add size based on degree relative to category max
-    nodes.forEach(n => {
-      const baseSize = 5;
-      const deg = degree.get(n.id) || 0;
-      let maxDeg;
-      if (seedSet.has(n.id)) maxDeg = maxDegreeSeed;
-      else if (n.type === 'triangle') maxDeg = maxDegreeCites;
-      else maxDeg = maxDegreeCited;
-      n.size = baseSize + (deg / maxDeg) * 3;
-    });
-
-    stats = { papers: filteredPapers.length, seeds: seeds.length, citations: edges.length };
+    // Update state
     currentNodes = nodes;
     currentEdges = edges;
+    stats = { papers: filteredPapers.length, seeds: seeds.length, citations: edges.length };
+    clearHighlight();
+
+    // Render
     updateSearchOptions();
-
-    if (graph) graph._destructor();
-
-    graph = ForceGraph()(graphContainer)
-      .graphData({ nodes, links: edges })
-      .linkColor(link => {
-        if (!highlight.node) return '#ddd';
-        const src = typeof link.source === 'object' ? link.source.id : link.source;
-        const tgt = typeof link.target === 'object' ? link.target.id : link.target;
-        return (src === highlight.node || tgt === highlight.node) ? '#999' : 'rgba(200,200,200,0.1)';
-      })
-      .linkDirectionalArrowLength(2)
-      .onNodeClick((node) => {
-        if (highlight.node === node.id) {
-          highlight.node = null;
-          highlight.neighbors = new Set();
-        } else {
-          highlight.node = node.id;
-          highlight.neighbors = new Set();
-          edges.forEach(e => {
-            const src = typeof e.source === 'object' ? e.source.id : e.source;
-            const tgt = typeof e.target === 'object' ? e.target.id : e.target;
-            if (src === node.id) highlight.neighbors.add(tgt);
-            if (tgt === node.id) highlight.neighbors.add(src);
-          });
-        }
-        // Trigger re-render by re-setting accessor
-        graph.nodeCanvasObject(graph.nodeCanvasObject()).linkColor(graph.linkColor());
-      })
-      .onBackgroundClick(() => {
-        highlight.node = null;
-        highlight.neighbors = new Set();
-        // Trigger re-render by re-setting accessor
-        graph.nodeCanvasObject(graph.nodeCanvasObject()).linkColor(graph.linkColor());
-      })
-      .d3Force('charge', d3.forceManyBody().strength(-50))
-      .d3Force('link', d3.forceLink().distance(60))
-      .nodeCanvasObject((node, ctx, globalScale) => {
-        const size = node.size;
-        const isHighlighted = !highlight.node || highlight.node === node.id || highlight.neighbors.has(node.id);
-        ctx.globalAlpha = isHighlighted ? 1 : 0.15;
-        ctx.fillStyle = node.color;
-        ctx.strokeStyle = '#fff';
-        ctx.lineWidth = 1 / globalScale;
-
-        if (node.type === 'square') {
-          ctx.fillRect(node.x - size, node.y - size, size * 2, size * 2);
-          ctx.strokeRect(node.x - size, node.y - size, size * 2, size * 2);
-        } else if (node.type === 'triangle') {
-          ctx.beginPath();
-          ctx.moveTo(node.x, node.y - size);
-          ctx.lineTo(node.x + size, node.y + size);
-          ctx.lineTo(node.x - size, node.y + size);
-          ctx.closePath();
-          ctx.fill();
-          ctx.stroke();
-        } else {
-          ctx.beginPath();
-          ctx.arc(node.x, node.y, size, 0, 2 * Math.PI);
-          ctx.fill();
-          ctx.stroke();
-        }
-        ctx.globalAlpha = 1;
-      })
-      .nodePointerAreaPaint((node, color, ctx) => {
-        ctx.fillStyle = color;
-        ctx.beginPath();
-        ctx.arc(node.x, node.y, node.size, 0, 2 * Math.PI);
-        ctx.fill();
-      })
-      .nodeLabel(n => {
-        const p = n.paper;
-        const year = p.year ? ` (${p.year})` : '';
-        const authors = p.authors?.join(', ') || 'Unknown';
-        const venue = p.venue ? `<br><i>${p.venue}</i>` : '';
-        return `<b>${p.title || n.id}${year}</b><br>${authors}${venue}`;
-      })
-      .cooldownTicks(200);
+    createGraph(nodes, edges);
   }
 
-  function updateSearchOptions() {
-    if (!tomSelect) return;
-    tomSelect.clear();
-    tomSelect.clearOptions();
-    currentNodes.forEach(n => {
-      const p = n.paper;
-      const year = p.year ? ` (${p.year})` : '';
-      tomSelect.addOption({ value: n.id, text: `${p.title || n.id}${year}` });
-    });
-  }
-
-  function highlightNode(nodeId) {
-    if (!graph || !nodeId) return;
-    highlight.node = nodeId;
-    highlight.neighbors = new Set();
-    currentEdges.forEach(e => {
-      const src = typeof e.source === 'object' ? e.source.id : e.source;
-      const tgt = typeof e.target === 'object' ? e.target.id : e.target;
-      if (src === nodeId) highlight.neighbors.add(tgt);
-      if (tgt === nodeId) highlight.neighbors.add(src);
-    });
-    graph.nodeCanvasObject(graph.nodeCanvasObject()).linkColor(graph.linkColor());
+  function handleKeydown(event) {
+    if (event.key === 'Escape') {
+      clearHighlight();
+      refreshGraphHighlight();
+      tomSelect?.clear();
+    }
   }
 
   onMount(() => {
     tomSelect = new TomSelect(searchInput, {
       placeholder: 'Search papers...',
-      onChange: (value) => {
-        if (value) highlightNode(value);
-      }
+      onChange: value => value && highlightNode(value),
     });
+
+    window.addEventListener('keydown', handleKeydown);
+
     return () => {
+      window.removeEventListener('keydown', handleKeydown);
       graph?._destructor();
       tomSelect?.destroy();
     };
