@@ -76,16 +76,16 @@ jobs:
         run: |
           mkdir -p upload
           if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-            mv target/${{ matrix.target }}/release/papersearch.exe upload/papersearch-${{ matrix.name }}.exe
+            mv target/${{ matrix.target }}/release/papersearch.exe upload/papersearch-${{ github.ref_name }}-${{ matrix.name }}.exe
           else
-            mv target/${{ matrix.target }}/release/papersearch upload/papersearch-${{ matrix.name }}
+            mv target/${{ matrix.target }}/release/papersearch upload/papersearch-${{ github.ref_name }}-${{ matrix.name }}
           fi
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4
         with:
           name: papersearch-${{ matrix.name }}
-          path: upload/papersearch-${{ matrix.name }}${{ matrix.os == 'windows-latest' && '.exe' || '' }}
+          path: upload/papersearch*
 
 
   release:
