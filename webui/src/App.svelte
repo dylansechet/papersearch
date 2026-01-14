@@ -362,13 +362,42 @@
     }
   }
 
-  onMount(() => {
+  onMount(async () => {
     tomSelect = new TomSelect(searchInput, {
       placeholder: 'Search papers...',
       onChange: value => value && highlightNode(value),
     });
 
     window.addEventListener('keydown', handleKeydown);
+
+    // Load graph from API if a graph was provided
+    const params = new URLSearchParams(window.location.search);
+    if (params.has('graph')) {
+      try {
+        console.log('Loading graph from /api/graph...');
+        const response = await fetch('/api/graph');
+        console.log('Response status:', response.status);
+        const contentType = response.headers.get('content-type');
+        console.log('Content-Type:', contentType);
+        
+        if (response.ok) {
+          const text = await response.text();
+          console.log('Response text length:', text.length);
+          console.log('First 100 chars:', text.substring(0, 100));
+          
+          rawData = JSON.parse(text);
+          // Set default filter thresholds based on seed count
+          const defaultMin = Math.max(1, Math.round(rawData.seeds.length * 0.2));
+          minCitesSeeds = defaultMin;
+          minCitedBySeeds = defaultMin;
+          visualizeGraph();
+        } else {
+          console.error('Failed to load graph:', response.statusText);
+        }
+      } catch (error) {
+        console.error('Error loading graph from API:', error);
+      }
+    }
 
     return () => {
       window.removeEventListener('keydown', handleKeydown);
