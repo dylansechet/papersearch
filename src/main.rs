@@ -75,7 +75,7 @@ fn main() -> Result<()> {
 fn run_lookup(args: LookupArgs) -> Result<()> {
     let config = Config {
         api_key: args.api_key.clone(),
-        rate_limit_secs: if args.api_key.is_some() { 2 } else { 5 },
+        rate_limit_secs: if args.api_key.is_some() { 1 } else { 2 },
     };
 
     info!("Reading paper references from {:?}...", args.r#in);
