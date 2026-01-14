@@ -266,7 +266,15 @@
       .nodePointerAreaPaint(drawNodeHitArea)
       .nodeLabel(n => formatPaperLabel(n.paper, n.id))
       .cooldownTicks(GRAPH_CONFIG.cooldownTicks)
-      .onNodeClick(node => {
+      .onNodeClick((node, event) => {
+        // Ctrl+click to open Semantic Scholar page
+        if (event.ctrlKey || event.metaKey) {
+          const paperId = node.paper.semanticScholarId || node.id;
+          window.open(`https://www.semanticscholar.org/paper/${paperId}`, '_blank');
+          return;
+        }
+        
+        // Regular click - toggle highlight
         if (highlight.node === node.id) {
           clearHighlight();
         } else {
