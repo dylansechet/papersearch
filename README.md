@@ -21,19 +21,13 @@ npm --prefix webui install && npm --prefix webui run build
 cargo install --path .
 ```
 
-## Quick Start
-
-To use this tool, you need to
-- build a literature graph by querying semantic scholar
-- visualize this graph in a local web ui.
-
-### 1. Build a citation graph
+## Quickstart
+### Lookup the reference graph
 
 ```bash
 papersearch lookup papers.txt -o graph.json
 ```
 
-Input file: one paper identifier per line (DOI, arXiv ID, or URL).
 
 <details>
 <summary>Example input</summary>
@@ -46,19 +40,8 @@ https://doi.org/10.48550/arXiv.2307.04526
 </details>
 
 
-### 2. View the graph
+### Open the graph in the web ui
 
 ```bash
 papersearch view graph.json
 ```
-
-Opens an interactive web UI where you can:
-- Search and highlight papers
-- Filter by citation counts
-- Explore reference and citation relationships
-
-Options:
-```bash
-papersearch view graph.json
-```
-
