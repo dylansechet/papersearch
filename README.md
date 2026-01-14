@@ -28,9 +28,11 @@ papersearch lookup papers.txt -o graph.json
 <summary>Example input</summary>
 
 ```
-https://doi.org/10.48550/arXiv.2201.05125
-https://doi.org/10.48550/arXiv.2306.12700
-https://doi.org/10.48550/arXiv.2307.04526
+10.1109/ICASSP43922.2022.9746317
+https://doi.org/10.1109/ICASSP48485.2024.10448020
+http://arxiv.org/abs/2211.08553
+arXiv.2306.09382  
+https://dl.acm.org/doi/10.1109/TASLP.2023.3271145
 ```
 </details>
 

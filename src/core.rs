@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
 use thiserror::Error;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use url::Url;
 
 #[derive(Error, Debug)]
@@ -193,23 +193,14 @@ impl Client {
 fn normalize_reference(reference: &str) -> Result<String> {
     let reference = reference.trim();
 
-    // Check for arXiv ID in DOI format (10.48550/arXiv.XXXX) first
-    if let Some(caps) = ARXIV_PATTERN.captures(reference) {
-        return Ok(format!("ARXIV:{}", &caps[0]));
-    }
-
     // Already normalized or a SHA hash
-    if reference.contains(':') && !reference.starts_with("http") || SHA_PATTERN.is_match(reference)
+    if (reference.contains(':') && !reference.starts_with("http"))
+        || SHA_PATTERN.is_match(reference)
     {
         return Ok(reference.to_string());
     }
 
-    // Try to extract DOI
-    if let Some(m) = DOI_PATTERN.find(reference) {
-        return Ok(format!("DOI:{}", m.as_str()));
-    }
-
-    // Handle URLs - API accepts them directly if from known domains
+    // Handle URLs from known domains
     if let Ok(url) = Url::parse(reference) {
         if let Some(domain) = url.host_str() {
             if [
@@ -224,6 +215,18 @@ fn normalize_reference(reference: &str) -> Result<String> {
             {
                 return Ok(format!("URL:{}", reference));
             }
+        }
+    }
+
+    // Try to extract DOI (from URL or plain text)
+    if let Some(m) = DOI_PATTERN.find(reference) {
+        return Ok(format!("DOI:{}", m.as_str()));
+    }
+
+    // Check for plain arXiv ID (only if not a URL)
+    if !reference.starts_with("http") && ARXIV_PATTERN.is_match(reference) {
+        if let Some(caps) = ARXIV_PATTERN.captures(reference) {
+            return Ok(format!("ARXIV:{}", &caps[0]));
         }
     }
 
@@ -380,6 +383,7 @@ pub fn fetch_citation_graph(references: Vec<String>, config: Config) -> Result<G
         })
         .collect();
 
+    debug!("Normalized references {:?}", ids);
     info!("Fetching coarse reference numbers");
     let counts = fetch_counts(&client, &ids)?;
     let batches = batch_papers(&counts);
