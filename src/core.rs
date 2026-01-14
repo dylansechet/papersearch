@@ -386,6 +386,19 @@ pub fn fetch_citation_graph(references: Vec<String>, config: Config) -> Result<G
     debug!("Normalized references {:?}", ids);
     info!("Fetching coarse reference numbers");
     let counts = fetch_counts(&client, &ids)?;
+
+    // Check for multiple inputs resolving to the same paper ID
+    // TODO: figure out what papers where duplicated.
+    // It's a bit of a pain with the current function signatures, so will probably require refactoring
+    let resolved_count = counts.len();
+    if resolved_count < ids.len() {
+        warn!(
+            "{} seed references resolved to {} unique papers (some may be duplicates)",
+            ids.len(),
+            resolved_count
+        );
+    }
+
     let batches = batch_papers(&counts);
     info!("Fetching paper details");
 
